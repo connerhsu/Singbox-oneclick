@@ -522,6 +522,44 @@ EOF
   green "已安装菜单命令：menu 或 proxy-menu"
 }
 
+port_usage() {
+  local port="$1"
+  local lines=""
+
+  if has_cmd ss; then
+    lines="$(ss -lntp 2>/dev/null | awk -v port="$port" '$4 ~ ":" port "$" {print}' | grep -v 'sing-box' || true)"
+  elif has_cmd netstat; then
+    lines="$(netstat -lntp 2>/dev/null | awk -v port="$port" '$4 ~ ":" port "$" {print}' | grep -v 'sing-box' || true)"
+  fi
+
+  printf '%s' "$lines"
+}
+
+ensure_port_available() {
+  local label="$1"
+  local var_name="$2"
+  local current usage next
+
+  while true; do
+    current="${!var_name}"
+    validate_port "$label" "$current"
+    usage="$(port_usage "$current")"
+
+    if [[ -z "$usage" ]]; then
+      break
+    fi
+
+    red "${label} 端口 ${current} 已被占用："
+    printf '%s\n' "$usage"
+    yellow "请换一个端口，或先停止占用该端口的程序后直接回车重试。"
+    read -r -p "新的 ${label} 端口 [${current}]: " next
+
+    if [[ -n "$next" ]]; then
+      printf -v "$var_name" '%s' "$next"
+    fi
+  done
+}
+
 collect_config() {
   local detected_host
   detected_host="$(guess_public_host)"
@@ -531,7 +569,7 @@ collect_config() {
   if [[ "${ENABLE_SHADOWTLS:-0}" == "1" ]]; then
     ST_PORT="$(safe_read "SS2022 + ShadowTLS 监听端口" "${ST_PORT:-$DEFAULT_ST_PORT}")"
     SHADOWTLS_HANDSHAKE="$(safe_read "ShadowTLS 握手伪装域名" "${SHADOWTLS_HANDSHAKE:-$DEFAULT_HANDSHAKE}")"
-    validate_port "ShadowTLS" "$ST_PORT"
+    ensure_port_available "ShadowTLS" ST_PORT
     SS_METHOD="${SS_METHOD:-2022-blake3-aes-128-gcm}"
     SS_PASSWORD="${SS_PASSWORD:-$(rand_base64 16)}"
     SHADOWTLS_PASSWORD="${SHADOWTLS_PASSWORD:-$(rand_base64 24)}"
@@ -540,14 +578,14 @@ collect_config() {
   if [[ "${ENABLE_ANYTLS:-0}" == "1" ]]; then
     ANYTLS_PORT="$(safe_read "AnyTLS 监听端口" "${ANYTLS_PORT:-$DEFAULT_ANYTLS_PORT}")"
     ANYTLS_SNI="$(safe_read "AnyTLS 证书/SNI 名称" "${ANYTLS_SNI:-$DEFAULT_ANYTLS_SNI}")"
-    validate_port "AnyTLS" "$ANYTLS_PORT"
+    ensure_port_available "AnyTLS" ANYTLS_PORT
     ANYTLS_PASSWORD="${ANYTLS_PASSWORD:-$(rand_base64 24)}"
   fi
 
   if [[ "${ENABLE_VLESS:-0}" == "1" ]]; then
     VLESS_PORT="$(safe_read "VLESS Reality 监听端口" "${VLESS_PORT:-$DEFAULT_VLESS_PORT}")"
     REALITY_HANDSHAKE="$(safe_read "Reality 握手伪装域名" "${REALITY_HANDSHAKE:-$DEFAULT_REALITY_HANDSHAKE}")"
-    validate_port "VLESS Reality" "$VLESS_PORT"
+    ensure_port_available "VLESS Reality" VLESS_PORT
     VLESS_UUID="${VLESS_UUID:-$(make_uuid)}"
     REALITY_SHORT_ID="${REALITY_SHORT_ID:-$(rand_hex 8)}"
   fi
