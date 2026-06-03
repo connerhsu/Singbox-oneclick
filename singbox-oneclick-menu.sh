@@ -178,6 +178,7 @@ load_profile() {
 }
 
 save_profile() {
+  mkdir -p "$BASE_DIR"
   umask 077
   {
     printf 'ENABLE_SHADOWTLS=%q\n' "${ENABLE_SHADOWTLS:-0}"
@@ -724,91 +725,72 @@ show_nodes() {
   enabled_protocol_text
   printf '\n'
 
-  if [[ "${ENABLE_SHADOWTLS:-0}" == "1" ]]; then
-    bold "SS2022 + ShadowTLS v3"
-    cat <<EOF
-服务器：${PUBLIC_HOST}
-端口：${ST_PORT}
-SS 方法：${SS_METHOD}
-SS 密码：${SS_PASSWORD}
-ShadowTLS 版本：3
-ShadowTLS 密码：${SHADOWTLS_PASSWORD}
-ShadowTLS SNI：${SHADOWTLS_HANDSHAKE}
+  bold "Mihomo proxies 配置"
+  cat <<'EOF'
+proxies:
 EOF
 
-    bold "SS2022 + ShadowTLS sing-box 客户端出站示例"
+  if [[ "${ENABLE_SHADOWTLS:-0}" == "1" ]]; then
     cat <<EOF
-[
-  {
-    "type": "shadowsocks",
-    "tag": "proxy",
-    "method": "${SS_METHOD}",
-    "password": "${SS_PASSWORD}",
-    "detour": "shadowtls-out"
-  },
-  {
-    "type": "shadowtls",
-    "tag": "shadowtls-out",
-    "server": "${PUBLIC_HOST}",
-    "server_port": ${ST_PORT},
-    "version": 3,
-    "password": "${SHADOWTLS_PASSWORD}",
-    "tls": {
-      "enabled": true,
-      "server_name": "${SHADOWTLS_HANDSHAKE}",
-      "utls": {
-        "enabled": true,
-        "fingerprint": "chrome"
-      }
-    }
-  }
-]
+  - name: SS2022-ShadowTLS
+    type: ss
+    server: ${PUBLIC_HOST}
+    port: ${ST_PORT}
+    cipher: ${SS_METHOD}
+    password: ${SS_PASSWORD}
+    udp: true
+    plugin: shadow-tls
+    client-fingerprint: chrome
+    plugin-opts:
+      host: ${SHADOWTLS_HANDSHAKE}
+      password: ${SHADOWTLS_PASSWORD}
+      version: 3
 EOF
   fi
 
   if [[ "${ENABLE_ANYTLS:-0}" == "1" ]]; then
-    bold "AnyTLS"
     cat <<EOF
-服务器：${PUBLIC_HOST}
-端口：${ANYTLS_PORT}
-密码：${ANYTLS_PASSWORD}
-SNI：${ANYTLS_SNI}
-证书：脚本默认生成自签证书，客户端需允许 insecure；如改用正式证书，可替换 ${CERT_FILE} 和 ${KEY_FILE}。
-
-sing-box 客户端出站示例：
-{
-  "type": "anytls",
-  "tag": "proxy",
-  "server": "${PUBLIC_HOST}",
-  "server_port": ${ANYTLS_PORT},
-  "password": "${ANYTLS_PASSWORD}",
-  "tls": {
-    "enabled": true,
-    "server_name": "${ANYTLS_SNI}",
-    "insecure": true,
-    "utls": {
-      "enabled": true,
-      "fingerprint": "chrome"
-    }
-  }
-}
+  - name: AnyTLS
+    type: anytls
+    server: ${PUBLIC_HOST}
+    port: ${ANYTLS_PORT}
+    password: ${ANYTLS_PASSWORD}
+    sni: ${ANYTLS_SNI}
+    udp: true
+    skip-cert-verify: true
+    client-fingerprint: chrome
 EOF
   fi
 
   if [[ "${ENABLE_VLESS:-0}" == "1" ]]; then
-    bold "VLESS Reality"
     cat <<EOF
-服务器：${PUBLIC_HOST}
-端口：${VLESS_PORT}
-UUID：${VLESS_UUID}
-Flow：xtls-rprx-vision
-Reality public key：${REALITY_PUBLIC_KEY}
-Reality short ID：${REALITY_SHORT_ID}
-Reality SNI：${REALITY_HANDSHAKE}
+  - name: VLESS-Reality
+    type: vless
+    server: ${PUBLIC_HOST}
+    port: ${VLESS_PORT}
+    uuid: ${VLESS_UUID}
+    network: tcp
+    tls: true
+    udp: true
+    flow: xtls-rprx-vision
+    servername: ${REALITY_HANDSHAKE}
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: ${REALITY_PUBLIC_KEY}
+      short-id: ${REALITY_SHORT_ID}
+EOF
+  fi
 
+  if [[ "${ENABLE_VLESS:-0}" == "1" ]]; then
+    bold "VLESS Reality URI"
+    cat <<EOF
 VLESS Reality URI：
 vless://${VLESS_UUID}@${PUBLIC_HOST}:${VLESS_PORT}?encryption=none&security=reality&sni=${REALITY_HANDSHAKE}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_SHORT_ID}&type=tcp&flow=xtls-rprx-vision#VLESS-Reality
 EOF
+  fi
+
+  if [[ "${ENABLE_ANYTLS:-0}" == "1" ]]; then
+    yellow "AnyTLS 使用自签证书时已输出 skip-cert-verify: true；如果你换正式证书，可以改成 false。"
   fi
 }
 
