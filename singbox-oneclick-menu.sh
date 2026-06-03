@@ -172,28 +172,120 @@ load_profile() {
     # shellcheck disable=SC1090
     source "$META_FILE"
   fi
+  ENABLE_SHADOWTLS="${ENABLE_SHADOWTLS:-0}"
+  ENABLE_ANYTLS="${ENABLE_ANYTLS:-0}"
+  ENABLE_VLESS="${ENABLE_VLESS:-0}"
 }
 
 save_profile() {
   umask 077
   {
-    printf 'PUBLIC_HOST=%q\n' "$PUBLIC_HOST"
-    printf 'ST_PORT=%q\n' "$ST_PORT"
-    printf 'SS_METHOD=%q\n' "$SS_METHOD"
-    printf 'SS_PASSWORD=%q\n' "$SS_PASSWORD"
-    printf 'SHADOWTLS_PASSWORD=%q\n' "$SHADOWTLS_PASSWORD"
-    printf 'SHADOWTLS_HANDSHAKE=%q\n' "$SHADOWTLS_HANDSHAKE"
-    printf 'ANYTLS_PORT=%q\n' "$ANYTLS_PORT"
-    printf 'ANYTLS_PASSWORD=%q\n' "$ANYTLS_PASSWORD"
-    printf 'ANYTLS_SNI=%q\n' "$ANYTLS_SNI"
-    printf 'VLESS_PORT=%q\n' "$VLESS_PORT"
-    printf 'VLESS_UUID=%q\n' "$VLESS_UUID"
-    printf 'REALITY_PRIVATE_KEY=%q\n' "$REALITY_PRIVATE_KEY"
-    printf 'REALITY_PUBLIC_KEY=%q\n' "$REALITY_PUBLIC_KEY"
-    printf 'REALITY_SHORT_ID=%q\n' "$REALITY_SHORT_ID"
-    printf 'REALITY_HANDSHAKE=%q\n' "$REALITY_HANDSHAKE"
+    printf 'ENABLE_SHADOWTLS=%q\n' "${ENABLE_SHADOWTLS:-0}"
+    printf 'ENABLE_ANYTLS=%q\n' "${ENABLE_ANYTLS:-0}"
+    printf 'ENABLE_VLESS=%q\n' "${ENABLE_VLESS:-0}"
+    printf 'PUBLIC_HOST=%q\n' "${PUBLIC_HOST:-}"
+    printf 'ST_PORT=%q\n' "${ST_PORT:-}"
+    printf 'SS_METHOD=%q\n' "${SS_METHOD:-}"
+    printf 'SS_PASSWORD=%q\n' "${SS_PASSWORD:-}"
+    printf 'SHADOWTLS_PASSWORD=%q\n' "${SHADOWTLS_PASSWORD:-}"
+    printf 'SHADOWTLS_HANDSHAKE=%q\n' "${SHADOWTLS_HANDSHAKE:-}"
+    printf 'ANYTLS_PORT=%q\n' "${ANYTLS_PORT:-}"
+    printf 'ANYTLS_PASSWORD=%q\n' "${ANYTLS_PASSWORD:-}"
+    printf 'ANYTLS_SNI=%q\n' "${ANYTLS_SNI:-}"
+    printf 'VLESS_PORT=%q\n' "${VLESS_PORT:-}"
+    printf 'VLESS_UUID=%q\n' "${VLESS_UUID:-}"
+    printf 'REALITY_PRIVATE_KEY=%q\n' "${REALITY_PRIVATE_KEY:-}"
+    printf 'REALITY_PUBLIC_KEY=%q\n' "${REALITY_PUBLIC_KEY:-}"
+    printf 'REALITY_SHORT_ID=%q\n' "${REALITY_SHORT_ID:-}"
+    printf 'REALITY_HANDSHAKE=%q\n' "${REALITY_HANDSHAKE:-}"
   } > "$META_FILE"
   chmod 600 "$META_FILE"
+}
+
+reset_protocol_selection() {
+  ENABLE_SHADOWTLS=0
+  ENABLE_ANYTLS=0
+  ENABLE_VLESS=0
+}
+
+enable_protocol_token() {
+  local token
+  token="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+
+  case "$token" in
+    1|ss|ss2022|shadowtls|ss2022-shadowtls|ss2022+shadowtls)
+      ENABLE_SHADOWTLS=1
+      ;;
+    2|anytls|any)
+      ENABLE_ANYTLS=1
+      ;;
+    3|vless|reality|vless-reality|vless+reality)
+      ENABLE_VLESS=1
+      ;;
+    4|all|a|全部)
+      ENABLE_SHADOWTLS=1
+      ENABLE_ANYTLS=1
+      ENABLE_VLESS=1
+      ;;
+    *)
+      red "未知协议选择：$1"
+      return 1
+      ;;
+  esac
+}
+
+selection_is_empty() {
+  [[ "${ENABLE_SHADOWTLS:-0}" != "1" && "${ENABLE_ANYTLS:-0}" != "1" && "${ENABLE_VLESS:-0}" != "1" ]]
+}
+
+choose_protocols() {
+  local tokens=("$@")
+  local input token
+
+  reset_protocol_selection
+
+  if (( ${#tokens[@]} > 0 )); then
+    for token in "${tokens[@]}"; do
+      enable_protocol_token "$token"
+    done
+  else
+    cat <<'EOF'
+请选择要安装/启用的协议：
+1. SS2022 + ShadowTLS
+2. AnyTLS
+3. VLESS Reality
+4. 全部
+
+可输入单个或多个，例如：1 3
+EOF
+    read -r -p "请输入选择 [4]: " input
+    input="${input:-4}"
+    for token in $input; do
+      enable_protocol_token "$token"
+    done
+  fi
+
+  if selection_is_empty; then
+    red "至少要选择一个协议。"
+    exit 1
+  fi
+}
+
+enabled_protocol_text() {
+  local parts=()
+  [[ "${ENABLE_SHADOWTLS:-0}" == "1" ]] && parts+=("SS2022+ShadowTLS")
+  [[ "${ENABLE_ANYTLS:-0}" == "1" ]] && parts+=("AnyTLS")
+  [[ "${ENABLE_VLESS:-0}" == "1" ]] && parts+=("VLESS Reality")
+  if (( ${#parts[@]} == 0 )); then
+    printf '未选择'
+  else
+    local joined="${parts[0]}"
+    local i
+    for (( i = 1; i < ${#parts[@]}; i++ )); do
+      joined="${joined} / ${parts[$i]}"
+    done
+    printf '%s' "$joined"
+  fi
 }
 
 guess_public_host() {
@@ -228,15 +320,11 @@ generate_cert() {
 write_config() {
   mkdir -p "$BASE_DIR"
   umask 077
-  cat > "$CONFIG_FILE" <<EOF
-{
-  "log": {
-    "disabled": false,
-    "level": "info",
-    "output": "${LOG_FILE}",
-    "timestamp": true
-  },
-  "inbounds": [
+
+  local inbounds=()
+
+  if [[ "${ENABLE_SHADOWTLS:-0}" == "1" ]]; then
+    inbounds+=("$(cat <<SHADOWTLS_JSON
     {
       "type": "shadowtls",
       "tag": "shadowtls-in",
@@ -255,7 +343,10 @@ write_config() {
       },
       "strict_mode": true,
       "detour": "ss2022-in"
-    },
+    }
+SHADOWTLS_JSON
+)")
+    inbounds+=("$(cat <<SS_JSON
     {
       "type": "shadowsocks",
       "tag": "ss2022-in",
@@ -263,7 +354,13 @@ write_config() {
       "network": "tcp",
       "method": "${SS_METHOD}",
       "password": "${SS_PASSWORD}"
-    },
+    }
+SS_JSON
+)")
+  fi
+
+  if [[ "${ENABLE_ANYTLS:-0}" == "1" ]]; then
+    inbounds+=("$(cat <<ANYTLS_JSON
     {
       "type": "anytls",
       "tag": "anytls-in",
@@ -281,7 +378,13 @@ write_config() {
         "certificate_path": "${CERT_FILE}",
         "key_path": "${KEY_FILE}"
       }
-    },
+    }
+ANYTLS_JSON
+)")
+  fi
+
+  if [[ "${ENABLE_VLESS:-0}" == "1" ]]; then
+    inbounds+=("$(cat <<VLESS_JSON
     {
       "type": "vless",
       "tag": "vless-reality-in",
@@ -311,6 +414,34 @@ write_config() {
         }
       }
     }
+VLESS_JSON
+)")
+  fi
+
+  if (( ${#inbounds[@]} == 0 )); then
+    red "没有选择任何协议，无法生成配置。"
+    exit 1
+  fi
+
+  {
+    cat <<EOF
+{
+  "log": {
+    "disabled": false,
+    "level": "info",
+    "output": "${LOG_FILE}",
+    "timestamp": true
+  },
+  "inbounds": [
+EOF
+    local i
+    for (( i = 0; i < ${#inbounds[@]}; i++ )); do
+      if (( i > 0 )); then
+        printf ',\n'
+      fi
+      printf '%s\n' "${inbounds[$i]}"
+    done
+    cat <<EOF
   ],
   "outbounds": [
     {
@@ -327,6 +458,7 @@ write_config() {
   }
 }
 EOF
+  } > "$CONFIG_FILE"
   chmod 600 "$CONFIG_FILE"
 }
 
@@ -354,8 +486,12 @@ EOF
 }
 
 open_firewall() {
-  local ports=("$ST_PORT" "$ANYTLS_PORT" "$VLESS_PORT")
+  local ports=()
   local port
+
+  [[ "${ENABLE_SHADOWTLS:-0}" == "1" ]] && ports+=("$ST_PORT")
+  [[ "${ENABLE_ANYTLS:-0}" == "1" ]] && ports+=("$ANYTLS_PORT")
+  [[ "${ENABLE_VLESS:-0}" == "1" ]] && ports+=("$VLESS_PORT")
 
   if has_cmd ufw && ufw status 2>/dev/null | grep -qi active; then
     for port in "${ports[@]}"; do
@@ -391,27 +527,55 @@ collect_config() {
   detected_host="$(guess_public_host)"
 
   PUBLIC_HOST="$(safe_read "服务器公网 IP 或域名" "${PUBLIC_HOST:-$detected_host}")"
-  ST_PORT="$(safe_read "SS2022 + ShadowTLS 监听端口" "${ST_PORT:-$DEFAULT_ST_PORT}")"
-  ANYTLS_PORT="$(safe_read "AnyTLS 监听端口" "${ANYTLS_PORT:-$DEFAULT_ANYTLS_PORT}")"
-  VLESS_PORT="$(safe_read "VLESS Reality 监听端口" "${VLESS_PORT:-$DEFAULT_VLESS_PORT}")"
-  SHADOWTLS_HANDSHAKE="$(safe_read "ShadowTLS 握手伪装域名" "${SHADOWTLS_HANDSHAKE:-$DEFAULT_HANDSHAKE}")"
-  REALITY_HANDSHAKE="$(safe_read "Reality 握手伪装域名" "${REALITY_HANDSHAKE:-$DEFAULT_REALITY_HANDSHAKE}")"
-  ANYTLS_SNI="$(safe_read "AnyTLS 证书/SNI 名称" "${ANYTLS_SNI:-$DEFAULT_ANYTLS_SNI}")"
 
-  validate_port "ShadowTLS" "$ST_PORT"
-  validate_port "AnyTLS" "$ANYTLS_PORT"
-  validate_port "VLESS Reality" "$VLESS_PORT"
+  if [[ "${ENABLE_SHADOWTLS:-0}" == "1" ]]; then
+    ST_PORT="$(safe_read "SS2022 + ShadowTLS 监听端口" "${ST_PORT:-$DEFAULT_ST_PORT}")"
+    SHADOWTLS_HANDSHAKE="$(safe_read "ShadowTLS 握手伪装域名" "${SHADOWTLS_HANDSHAKE:-$DEFAULT_HANDSHAKE}")"
+    validate_port "ShadowTLS" "$ST_PORT"
+    SS_METHOD="${SS_METHOD:-2022-blake3-aes-128-gcm}"
+    SS_PASSWORD="${SS_PASSWORD:-$(rand_base64 16)}"
+    SHADOWTLS_PASSWORD="${SHADOWTLS_PASSWORD:-$(rand_base64 24)}"
+  fi
 
-  SS_METHOD="${SS_METHOD:-2022-blake3-aes-128-gcm}"
-  SS_PASSWORD="${SS_PASSWORD:-$(rand_base64 16)}"
-  SHADOWTLS_PASSWORD="${SHADOWTLS_PASSWORD:-$(rand_base64 24)}"
-  ANYTLS_PASSWORD="${ANYTLS_PASSWORD:-$(rand_base64 24)}"
-  VLESS_UUID="${VLESS_UUID:-$(make_uuid)}"
-  REALITY_SHORT_ID="${REALITY_SHORT_ID:-$(rand_hex 8)}"
+  if [[ "${ENABLE_ANYTLS:-0}" == "1" ]]; then
+    ANYTLS_PORT="$(safe_read "AnyTLS 监听端口" "${ANYTLS_PORT:-$DEFAULT_ANYTLS_PORT}")"
+    ANYTLS_SNI="$(safe_read "AnyTLS 证书/SNI 名称" "${ANYTLS_SNI:-$DEFAULT_ANYTLS_SNI}")"
+    validate_port "AnyTLS" "$ANYTLS_PORT"
+    ANYTLS_PASSWORD="${ANYTLS_PASSWORD:-$(rand_base64 24)}"
+  fi
 
-  if [[ -z "${REALITY_PRIVATE_KEY:-}" || -z "${REALITY_PUBLIC_KEY:-}" ]]; then
+  if [[ "${ENABLE_VLESS:-0}" == "1" ]]; then
+    VLESS_PORT="$(safe_read "VLESS Reality 监听端口" "${VLESS_PORT:-$DEFAULT_VLESS_PORT}")"
+    REALITY_HANDSHAKE="$(safe_read "Reality 握手伪装域名" "${REALITY_HANDSHAKE:-$DEFAULT_REALITY_HANDSHAKE}")"
+    validate_port "VLESS Reality" "$VLESS_PORT"
+    VLESS_UUID="${VLESS_UUID:-$(make_uuid)}"
+    REALITY_SHORT_ID="${REALITY_SHORT_ID:-$(rand_hex 8)}"
+  fi
+
+  if [[ "${ENABLE_VLESS:-0}" == "1" && ( -z "${REALITY_PRIVATE_KEY:-}" || -z "${REALITY_PUBLIC_KEY:-}" ) ]]; then
     make_reality_keys
   fi
+
+  check_port_conflicts
+}
+
+check_port_conflicts() {
+  local used=()
+  [[ "${ENABLE_SHADOWTLS:-0}" == "1" ]] && used+=("ShadowTLS:${ST_PORT}")
+  [[ "${ENABLE_ANYTLS:-0}" == "1" ]] && used+=("AnyTLS:${ANYTLS_PORT}")
+  [[ "${ENABLE_VLESS:-0}" == "1" ]] && used+=("VLESS Reality:${VLESS_PORT}")
+
+  local i j left right
+  for (( i = 0; i < ${#used[@]}; i++ )); do
+    for (( j = i + 1; j < ${#used[@]}; j++ )); do
+      left="${used[$i]}"
+      right="${used[$j]}"
+      if [[ "${left#*:}" == "${right#*:}" ]]; then
+        red "端口冲突：${left%:*} 和 ${right%:*} 都使用 ${left#*:}"
+        exit 1
+      fi
+    done
+  done
 }
 
 check_config() {
@@ -424,9 +588,10 @@ check_config() {
 install_all() {
   need_root
   load_profile
+  choose_protocols "$@"
   install_sing_box
   collect_config
-  generate_cert
+  [[ "${ENABLE_ANYTLS:-0}" == "1" ]] && generate_cert
   save_profile
   write_config
   check_config
@@ -435,7 +600,8 @@ install_all() {
   install_menu_command
   systemctl enable --now "$SERVICE_NAME"
   systemctl restart "$SERVICE_NAME"
-  green "安装完成。SSH 登录后输入 menu 即可唤出面板。"
+  green "安装完成。当前启用：$(enabled_protocol_text)"
+  green "SSH 登录后输入 menu 即可唤出面板。"
   show_status
   show_nodes
 }
@@ -462,16 +628,32 @@ stop_service() {
 }
 
 show_ports() {
+  local patterns=()
+  [[ "${ENABLE_SHADOWTLS:-0}" == "1" && -n "${ST_PORT:-}" ]] && patterns+=(":${ST_PORT}")
+  [[ "${ENABLE_ANYTLS:-0}" == "1" && -n "${ANYTLS_PORT:-}" ]] && patterns+=(":${ANYTLS_PORT}")
+  [[ "${ENABLE_VLESS:-0}" == "1" && -n "${VLESS_PORT:-}" ]] && patterns+=(":${VLESS_PORT}")
+
+  if (( ${#patterns[@]} == 0 )); then
+    yellow "没有已启用协议的端口记录。"
+    return
+  fi
+
+  local joined="${patterns[0]}"
+  local i
+  for (( i = 1; i < ${#patterns[@]}; i++ )); do
+    joined="${joined}|${patterns[$i]}"
+  done
   if has_cmd ss; then
-    ss -lntp 2>/dev/null | grep -E "(:${ST_PORT}|:${ANYTLS_PORT}|:${VLESS_PORT})" || true
+    ss -lntp 2>/dev/null | grep -E "(${joined})" || true
   elif has_cmd netstat; then
-    netstat -lntp 2>/dev/null | grep -E "(:${ST_PORT}|:${ANYTLS_PORT}|:${VLESS_PORT})" || true
+    netstat -lntp 2>/dev/null | grep -E "(${joined})" || true
   fi
 }
 
 show_status() {
   load_profile
   bold "运行状态"
+  printf '当前启用：%s\n' "$(enabled_protocol_text)"
 
   if has_cmd systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
     if systemctl is-active --quiet "$SERVICE_NAME"; then
@@ -484,10 +666,8 @@ show_status() {
     yellow "未检测到 systemd 服务。"
   fi
 
-  if [[ -n "${ST_PORT:-}" ]]; then
-    bold "监听端口"
-    show_ports
-  fi
+  bold "监听端口"
+  show_ports
 
   if [[ -x "$BIN_FILE" && -f "$CONFIG_FILE" ]]; then
     bold "配置检查"
@@ -502,8 +682,13 @@ show_nodes() {
     return
   fi
 
-  bold "SS2022 + ShadowTLS v3"
-  cat <<EOF
+  bold "当前启用"
+  enabled_protocol_text
+  printf '\n'
+
+  if [[ "${ENABLE_SHADOWTLS:-0}" == "1" ]]; then
+    bold "SS2022 + ShadowTLS v3"
+    cat <<EOF
 服务器：${PUBLIC_HOST}
 端口：${ST_PORT}
 SS 方法：${SS_METHOD}
@@ -513,8 +698,8 @@ ShadowTLS 密码：${SHADOWTLS_PASSWORD}
 ShadowTLS SNI：${SHADOWTLS_HANDSHAKE}
 EOF
 
-  bold "SS2022 + ShadowTLS sing-box 客户端出站示例"
-  cat <<EOF
+    bold "SS2022 + ShadowTLS sing-box 客户端出站示例"
+    cat <<EOF
 [
   {
     "type": "shadowsocks",
@@ -541,9 +726,11 @@ EOF
   }
 ]
 EOF
+  fi
 
-  bold "AnyTLS"
-  cat <<EOF
+  if [[ "${ENABLE_ANYTLS:-0}" == "1" ]]; then
+    bold "AnyTLS"
+    cat <<EOF
 服务器：${PUBLIC_HOST}
 端口：${ANYTLS_PORT}
 密码：${ANYTLS_PASSWORD}
@@ -568,9 +755,11 @@ sing-box 客户端出站示例：
   }
 }
 EOF
+  fi
 
-  bold "VLESS Reality"
-  cat <<EOF
+  if [[ "${ENABLE_VLESS:-0}" == "1" ]]; then
+    bold "VLESS Reality"
+    cat <<EOF
 服务器：${PUBLIC_HOST}
 端口：${VLESS_PORT}
 UUID：${VLESS_UUID}
@@ -582,6 +771,7 @@ Reality SNI：${REALITY_HANDSHAKE}
 VLESS Reality URI：
 vless://${VLESS_UUID}@${PUBLIC_HOST}:${VLESS_PORT}?encryption=none&security=reality&sni=${REALITY_HANDSHAKE}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_SHORT_ID}&type=tcp&flow=xtls-rprx-vision#VLESS-Reality
 EOF
+  fi
 }
 
 show_logs() {
@@ -607,8 +797,10 @@ follow_logs() {
 rebuild_config() {
   need_root
   load_profile
+  printf '当前启用：%s\n' "$(enabled_protocol_text)"
+  choose_protocols "$@"
   collect_config
-  generate_cert
+  [[ "${ENABLE_ANYTLS:-0}" == "1" ]] && generate_cert
   save_profile
   write_config
   check_config
@@ -645,7 +837,7 @@ menu_loop() {
   while true; do
     print_header
     cat <<'EOF'
-1. 安装 / 重新安装三合一配置
+1. 安装 / 重新安装（可单独选择协议）
 2. 查看运行状态
 3. 显示节点参数和客户端配置
 4. 启动服务
@@ -653,7 +845,7 @@ menu_loop() {
 6. 重启服务
 7. 查看最近日志
 8. 实时跟踪日志
-9. 修改端口 / SNI / 重建配置
+9. 修改协议选择 / 端口 / SNI / 重建配置
 10. 安装或刷新 menu 命令
 11. 卸载
 0. 退出
@@ -683,7 +875,12 @@ usage() {
   cat <<EOF
 用法：
   sudo bash $0              打开交互面板
-  sudo bash $0 install      一键安装并生成配置
+  sudo bash $0 install      进入选择并安装
+  sudo bash $0 install all  安装全部协议
+  sudo bash $0 install ss2022-shadowtls
+  sudo bash $0 install anytls
+  sudo bash $0 install vless-reality
+  sudo bash $0 install 1 3  安装 SS2022+ShadowTLS 和 VLESS Reality
   sudo bash $0 status       查看运行状态
   sudo bash $0 nodes        显示节点参数
   sudo bash $0 restart      重启服务
@@ -698,7 +895,7 @@ EOF
 main() {
   case "${1:-menu}" in
     menu) menu_loop ;;
-    install) install_all ;;
+    install) shift; install_all "$@" ;;
     status) need_root; show_status ;;
     nodes) show_nodes ;;
     start) start_service ;;
@@ -706,7 +903,7 @@ main() {
     restart) restart_service ;;
     logs) show_logs ;;
     follow-logs) follow_logs ;;
-    rebuild) rebuild_config ;;
+    rebuild) shift; rebuild_config "$@" ;;
     uninstall) uninstall_all ;;
     help|-h|--help) usage ;;
     *) usage; exit 1 ;;
